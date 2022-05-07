@@ -9,7 +9,6 @@ import (
 	"github.com/multycloud/multy/resources/common"
 	"github.com/multycloud/multy/resources/output"
 	"github.com/multycloud/multy/resources/output/route_table"
-	rg "github.com/multycloud/multy/resources/resource_group"
 	"github.com/multycloud/multy/validate"
 )
 
@@ -18,6 +17,19 @@ Notes:
 AWS: Internet route to IGW
 Azure: Internet route nextHop Internet
 */
+
+var routeTableMetadata = resources.ResourceMetadata[*resourcespb.RouteTableArgs, *RouteTable, *resourcespb.RouteTableResource]{
+	DepsGetter: func(_ string, args *resourcespb.RouteTableArgs, _ resources.Resources) (res []string, err error) {
+		res = append(res, args.VirtualNetworkId)
+		return
+	},
+	CreateFunc:        CreateRouteTable,
+	UpdateFunc:        UpdateRouteTable,
+	ReadFromStateFunc: RouteTableFromState,
+	ExportFunc:        func(r *RouteTable) (*resourcespb.RouteTableArgs, error) { return r.Args, nil },
+	ImportFunc:        NewRouteTable,
+	AbbreviatedName:   "rt",
+}
 
 type RouteTable struct {
 	resources.ChildResourceWithId[*VirtualNetwork, *resourcespb.RouteTableArgs]
@@ -34,6 +46,31 @@ const (
 	INTERNET       = "Internet"
 	VIRTUALNETWORK = "VirtualNetwork"
 )
+
+func (r *RouteTable) GetMetadata() resources.ResourceMetadataInterface {
+	return &routeTableMetadata
+}
+
+func CreateRouteTable(resourceId string, args *resourcespb.RouteTableArgs, others resources.Resources) (*RouteTable, error) {
+	return NewRouteTable(resourceId, args, others)
+}
+
+func UpdateRouteTable(resource *RouteTable, vn *resourcespb.RouteTableArgs, others resources.Resources) error {
+	_, err := NewRouteTable(resource.ResourceId, vn, others)
+	return err
+}
+
+func RouteTableFromState(resource *RouteTable, _ *output.TfState) (*resourcespb.RouteTableResource, error) {
+	return &resourcespb.RouteTableResource{
+		CommonParameters: &commonpb.CommonChildResourceParameters{
+			ResourceId:  resource.ResourceId,
+			NeedsUpdate: false,
+		},
+		Name:             resource.Args.Name,
+		VirtualNetworkId: resource.Args.VirtualNetworkId,
+		Routes:           resource.Args.Routes,
+	}, nil
+}
 
 func NewRouteTable(resourceId string, args *resourcespb.RouteTableArgs, others resources.Resources) (*RouteTable, error) {
 	rt := &RouteTable{
@@ -83,7 +120,7 @@ func (r *RouteTable) Translate(resources.MultyContext) ([]output.TfBlock, error)
 	} else if r.GetCloud() == commonpb.CloudProvider_AZURE {
 		rt := route_table.AzureRouteTable{
 			AzResource: common.NewAzResource(
-				r.ResourceId, r.Args.Name, rg.GetResourceGroupName(r.VirtualNetwork.Args.GetCommonParameters().ResourceGroupId),
+				r.ResourceId, r.Args.Name, GetResourceGroupName(r.VirtualNetwork.Args.GetCommonParameters().ResourceGroupId),
 				r.GetCloudSpecificLocation(),
 			),
 		}

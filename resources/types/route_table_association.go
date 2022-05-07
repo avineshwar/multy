@@ -12,12 +12,48 @@ import (
 	"github.com/multycloud/multy/validate"
 )
 
-// route_table_association
+var routeTableAssociationMetadata = resources.ResourceMetadata[*resourcespb.RouteTableAssociationArgs, *RouteTableAssociation, *resourcespb.RouteTableAssociationResource]{
+	DepsGetter: func(_ string, args *resourcespb.RouteTableAssociationArgs, _ resources.Resources) (res []string, err error) {
+		res = append(res, args.SubnetId, args.RouteTableId)
+		return
+	},
+	CreateFunc:        CreateRouteTableAssociation,
+	UpdateFunc:        UpdateRouteTableAssociation,
+	ReadFromStateFunc: RouteTableAssociationFromState,
+	ExportFunc:        func(r *RouteTableAssociation) (*resourcespb.RouteTableAssociationArgs, error) { return r.Args, nil },
+	ImportFunc:        NewRouteTableAssociation,
+	AbbreviatedName:   "rt",
+}
+
 type RouteTableAssociation struct {
 	resources.ChildResourceWithId[*RouteTable, *resourcespb.RouteTableAssociationArgs]
 
 	RouteTable *RouteTable
 	Subnet     *Subnet
+}
+
+func (r *RouteTableAssociation) GetMetadata() resources.ResourceMetadataInterface {
+	return &routeTableAssociationMetadata
+}
+
+func CreateRouteTableAssociation(resourceId string, args *resourcespb.RouteTableAssociationArgs, others resources.Resources) (*RouteTableAssociation, error) {
+	return NewRouteTableAssociation(resourceId, args, others)
+}
+
+func UpdateRouteTableAssociation(resource *RouteTableAssociation, vn *resourcespb.RouteTableAssociationArgs, others resources.Resources) error {
+	_, err := NewRouteTableAssociation(resource.ResourceId, vn, others)
+	return err
+}
+
+func RouteTableAssociationFromState(resource *RouteTableAssociation, _ *output.TfState) (*resourcespb.RouteTableAssociationResource, error) {
+	return &resourcespb.RouteTableAssociationResource{
+		CommonParameters: &commonpb.CommonChildResourceParameters{
+			ResourceId:  resource.ResourceId,
+			NeedsUpdate: false,
+		},
+		SubnetId:     resource.Args.SubnetId,
+		RouteTableId: resource.Args.RouteTableId,
+	}, nil
 }
 
 func NewRouteTableAssociation(resourceId string, args *resourcespb.RouteTableAssociationArgs, others resources.Resources) (*RouteTableAssociation, error) {

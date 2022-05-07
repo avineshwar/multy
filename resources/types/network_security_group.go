@@ -8,7 +8,6 @@ import (
 	"github.com/multycloud/multy/resources/common"
 	"github.com/multycloud/multy/resources/output"
 	"github.com/multycloud/multy/resources/output/network_security_group"
-	rg "github.com/multycloud/multy/resources/resource_group"
 	"github.com/multycloud/multy/validate"
 	"strconv"
 	"strings"
@@ -21,10 +20,59 @@ When NSG is applied, only rules specified are allowed.
 AWS: VPC traffic is always added as an extra rule
 */
 
+var networkSecurityGroupMetadata = resources.ResourceMetadata[*resourcespb.NetworkSecurityGroupArgs, *NetworkSecurityGroup, *resourcespb.NetworkSecurityGroupResource]{
+	DepsGetter: func(_ string, args *resourcespb.NetworkSecurityGroupArgs, _ resources.Resources) (res []string, err error) {
+		res = append(res, args.VirtualNetworkId)
+		return res, err
+	},
+	CreateFunc:        CreateNetworkSecurityGroup,
+	UpdateFunc:        UpdateNetworkSecurityGroup,
+	ReadFromStateFunc: NetworkSecurityGroupFromState,
+	ExportFunc:        func(r *NetworkSecurityGroup) (*resourcespb.NetworkSecurityGroupArgs, error) { return r.Args, nil },
+	ImportFunc:        NewNetworkSecurityGroup,
+	AbbreviatedName:   "nsg",
+}
+
 type NetworkSecurityGroup struct {
 	resources.ResourceWithId[*resourcespb.NetworkSecurityGroupArgs]
 
 	VirtualNetwork *VirtualNetwork
+}
+
+func (r *NetworkSecurityGroup) GetMetadata() resources.ResourceMetadataInterface {
+	return &networkSecurityGroupMetadata
+}
+
+func CreateNetworkSecurityGroup(resourceId string, args *resourcespb.NetworkSecurityGroupArgs, others resources.Resources) (*NetworkSecurityGroup, error) {
+	if args.CommonParameters.ResourceGroupId == "" {
+		vn, err := resources.Get[*VirtualNetwork](resourceId, others, args.VirtualNetworkId)
+		if err != nil {
+			return nil, err
+		}
+		rgId := vn.Args.CommonParameters.ResourceGroupId
+		args.CommonParameters.ResourceGroupId = rgId
+	}
+
+	return NewNetworkSecurityGroup(resourceId, args, others)
+}
+func UpdateNetworkSecurityGroup(resource *NetworkSecurityGroup, vn *resourcespb.NetworkSecurityGroupArgs, others resources.Resources) error {
+	_, err := NewNetworkSecurityGroup(resource.ResourceId, vn, others)
+	return err
+}
+
+func NetworkSecurityGroupFromState(resource *NetworkSecurityGroup, _ *output.TfState) (*resourcespb.NetworkSecurityGroupResource, error) {
+	return &resourcespb.NetworkSecurityGroupResource{
+		CommonParameters: &commonpb.CommonResourceParameters{
+			ResourceId:      resource.ResourceId,
+			ResourceGroupId: resource.Args.CommonParameters.ResourceGroupId,
+			Location:        resource.Args.CommonParameters.Location,
+			CloudProvider:   resource.Args.CommonParameters.CloudProvider,
+			NeedsUpdate:     false,
+		},
+		Name:             resource.Args.Name,
+		VirtualNetworkId: resource.Args.VirtualNetworkId,
+		Rules:            resource.Args.Rules,
+	}, nil
 }
 
 type RuleType struct {
@@ -90,7 +138,7 @@ func (r *NetworkSecurityGroup) Translate(resources.MultyContext) ([]output.TfBlo
 		return []output.TfBlock{
 			network_security_group.AzureNsg{
 				AzResource: common.NewAzResource(
-					r.ResourceId, r.Args.Name, rg.GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
+					r.ResourceId, r.Args.Name, GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
 					r.GetCloudSpecificLocation(),
 				),
 				Rules: translateAzNsgRules(r.Args.Rules),

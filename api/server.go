@@ -25,6 +25,8 @@ import (
 	"github.com/multycloud/multy/api/services/virtual_network"
 	"github.com/multycloud/multy/api/util"
 	"github.com/multycloud/multy/db"
+	"github.com/multycloud/multy/resources"
+	"github.com/multycloud/multy/resources/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"log"
@@ -374,8 +376,12 @@ func (s *Server) refresh(ctx context.Context, _ *commonpb.Empty) (*commonpb.Empt
 	if err != nil {
 		return nil, err
 	}
+	mconfig, err := resources.LoadConfig(c, types.Metadatas)
+	if err != nil {
+		return nil, err
+	}
 
-	_, err = deploy.EncodeAndStoreTfFile(ctx, c, nil, nil, true)
+	_, err = deploy.EncodeAndStoreTfFile(ctx, mconfig, nil, nil, true)
 	if err != nil {
 		return nil, err
 	}

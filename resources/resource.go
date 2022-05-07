@@ -15,6 +15,7 @@ import (
 type Resources struct {
 	ResourceMap  map[string]Resource
 	dependencies map[string][]string
+	resources    []Resource
 }
 
 func NewResources() Resources {
@@ -22,6 +23,25 @@ func NewResources() Resources {
 		ResourceMap:  map[string]Resource{},
 		dependencies: map[string][]string{},
 	}
+}
+
+func (r Resources) Add(resource Resource) {
+	r.ResourceMap[resource.GetResourceId()] = resource
+	r.resources = append(r.resources, resource)
+}
+
+func (r Resources) Delete(resourceId string) {
+	for i, resource := range r.resources {
+		if resource.GetResourceId() == resourceId {
+			r.resources = slices.Delete(r.resources, i, i+1)
+			break
+		}
+	}
+	delete(r.ResourceMap, resourceId)
+}
+
+func (r Resources) GetAll() []Resource {
+	return r.resources
 }
 
 // Get finds the resource with the given id and adds a dependency between dependentResourceId and id.
@@ -155,6 +175,8 @@ type Resource interface {
 	GetCloud() commonpb.CloudProvider
 
 	GetCommonArgs() any
+
+	GetMetadata() ResourceMetadataInterface
 }
 
 func (c *CloudSpecificResource) GetMainOutputId() (string, error) {

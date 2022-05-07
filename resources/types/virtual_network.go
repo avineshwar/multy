@@ -10,7 +10,6 @@ import (
 	"github.com/multycloud/multy/resources/output/network_security_group"
 	"github.com/multycloud/multy/resources/output/route_table"
 	"github.com/multycloud/multy/resources/output/virtual_network"
-	rg "github.com/multycloud/multy/resources/resource_group"
 	"github.com/multycloud/multy/validate"
 )
 
@@ -22,8 +21,32 @@ AZ: Route table created to restrict traffic on vnet
 
 */
 
+var virtualNetworkMetadata = resources.ResourceMetadata[*resourcespb.VirtualNetworkArgs, *VirtualNetwork, *resourcespb.VirtualNetworkResource]{
+	ImportFunc:        NewVirtualNetwork,
+	CreateFunc:        CreateVirtualNetwork,
+	UpdateFunc:        UpdateVirtualNetwork,
+	ReadFromStateFunc: VirtualNetworkFromState,
+	ExportFunc:        ExportVirtualNetwork,
+	AbbreviatedName:   "vn",
+}
+
 type VirtualNetwork struct {
 	resources.ResourceWithId[*resourcespb.VirtualNetworkArgs]
+}
+
+func CreateVirtualNetwork(resourceId string, vn *resourcespb.VirtualNetworkArgs, others resources.Resources) (*VirtualNetwork, error) {
+	if vn.GetCommonParameters().GetResourceGroupId() == "" {
+		rgId := GetDefaultResourceGroupIdString("vn", common.RandomString(8))
+		vn.CommonParameters.ResourceGroupId = rgId
+		others.Add(NewResourceGroup(rgId, vn.CommonParameters.Location, vn.CommonParameters.CloudProvider))
+	}
+
+	return NewVirtualNetwork(resourceId, vn, others)
+}
+
+func UpdateVirtualNetwork(resource *VirtualNetwork, vn *resourcespb.VirtualNetworkArgs, others resources.Resources) error {
+	_, err := NewVirtualNetwork(resource.ResourceId, vn, others)
+	return err
 }
 
 func NewVirtualNetwork(resourceId string, vn *resourcespb.VirtualNetworkArgs, _ resources.Resources) (*VirtualNetwork, error) {
@@ -35,7 +58,11 @@ func NewVirtualNetwork(resourceId string, vn *resourcespb.VirtualNetworkArgs, _ 
 	}, nil
 }
 
-func (r *VirtualNetwork) FromState(state *output.TfState) (*resourcespb.VirtualNetworkResource, error) {
+func ExportVirtualNetwork(r *VirtualNetwork) (*resourcespb.VirtualNetworkArgs, error) {
+	return r.Args, nil
+}
+
+func VirtualNetworkFromState(r *VirtualNetwork, state *output.TfState) (*resourcespb.VirtualNetworkResource, error) {
 	out := new(resourcespb.VirtualNetworkResource)
 	out.CommonParameters = &commonpb.CommonResourceParameters{
 		ResourceId:      r.ResourceId,
@@ -68,6 +95,10 @@ func (r *VirtualNetwork) FromState(state *output.TfState) (*resourcespb.VirtualN
 	}
 
 	return out, nil
+}
+
+func (r *VirtualNetwork) GetMetadata() resources.ResourceMetadataInterface {
+	return &virtualNetworkMetadata
 }
 
 func (r *VirtualNetwork) Translate(resources.MultyContext) ([]output.TfBlock, error) {
@@ -103,13 +134,13 @@ func (r *VirtualNetwork) Translate(resources.MultyContext) ([]output.TfBlock, er
 	} else if r.GetCloud() == commonpb.CloudProvider_AZURE {
 		return []output.TfBlock{virtual_network.AzureVnet{
 			AzResource: common.NewAzResource(
-				r.ResourceId, r.Args.Name, rg.GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
+				r.ResourceId, r.Args.Name, GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
 				r.GetCloudSpecificLocation(),
 			),
 			AddressSpace: []string{r.Args.CidrBlock},
 		}, route_table.AzureRouteTable{
 			AzResource: common.NewAzResource(
-				r.ResourceId, r.Args.Name, rg.GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
+				r.ResourceId, r.Args.Name, GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId),
 				r.GetCloudSpecificLocation(),
 			),
 			Routes: []route_table.AzureRouteTableRoute{{

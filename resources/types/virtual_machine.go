@@ -6,6 +6,7 @@ import (
 	"github.com/multy-dev/hclencoder"
 	"github.com/multycloud/multy/api/proto/commonpb"
 	"github.com/multycloud/multy/api/proto/resourcespb"
+	"github.com/multycloud/multy/flags"
 	"github.com/multycloud/multy/resources"
 	"github.com/multycloud/multy/resources/common"
 	"github.com/multycloud/multy/resources/output"
@@ -15,7 +16,6 @@ import (
 	"github.com/multycloud/multy/resources/output/public_ip"
 	"github.com/multycloud/multy/resources/output/terraform"
 	"github.com/multycloud/multy/resources/output/virtual_machine"
-	rg "github.com/multycloud/multy/resources/resource_group"
 	"github.com/multycloud/multy/util"
 	"github.com/multycloud/multy/validate"
 	"log"
@@ -30,6 +30,29 @@ Azure: To have a private IP by default, if no NIC is passed, one will be created
  	   NSG_NIC association
 */
 
+var virtualMachineMetadata = resources.ResourceMetadata[*resourcespb.VirtualMachineArgs, *VirtualMachine, *resourcespb.VirtualMachineResource]{
+	DepsGetter: func(resourceId string, args *resourcespb.VirtualMachineArgs, others resources.Resources) (res []string, err error) {
+		res = append(res, args.NetworkSecurityGroupIds...)
+		res = append(res, args.NetworkInterfaceIds...)
+		res = append(res, args.SubnetId)
+		if args.PublicIpId != "" {
+			res = append(res, args.PublicIpId)
+		}
+		//for vapId, vap := range resources.FindArgsOfType[*resourcespb.VaultAccessPolicyArgs](others) {
+		//	if vap.Identity == getIdentity(resourceId) {
+		//		res = append(res, vapId)
+		//	}
+		//}
+		return
+	},
+	CreateFunc:        CreateVirtualMachine,
+	UpdateFunc:        UpdateVirtualMachine,
+	ReadFromStateFunc: VirtualMachineFromState,
+	ExportFunc:        func(r *VirtualMachine) (*resourcespb.VirtualMachineArgs, error) { return r.Args, nil },
+	ImportFunc:        NewVirtualMachine,
+	AbbreviatedName:   "vm",
+}
+
 type VirtualMachine struct {
 	resources.ResourceWithId[*resourcespb.VirtualMachineArgs]
 
@@ -37,6 +60,113 @@ type VirtualMachine struct {
 	NetworkSecurityGroups []*NetworkSecurityGroup
 	Subnet                *Subnet
 	PublicIp              *PublicIp
+}
+
+func (r *VirtualMachine) GetMetadata() resources.ResourceMetadataInterface {
+	return &virtualMachineMetadata
+}
+
+func CreateVirtualMachine(resourceId string, args *resourcespb.VirtualMachineArgs, others resources.Resources) (*VirtualMachine, error) {
+	if args.CommonParameters.ResourceGroupId == "" {
+		subnet, err := resources.Get[*Subnet](resourceId, others, args.SubnetId)
+		if err != nil {
+			return nil, err
+		}
+		rgId := subnet.VirtualNetwork.Args.CommonParameters.ResourceGroupId
+		args.CommonParameters.ResourceGroupId = rgId
+	}
+
+	return NewVirtualMachine(resourceId, args, others)
+}
+
+func UpdateVirtualMachine(resource *VirtualMachine, vn *resourcespb.VirtualMachineArgs, others resources.Resources) error {
+	_, err := NewVirtualMachine(resource.ResourceId, vn, others)
+	return err
+}
+
+func VirtualMachineFromState(resource *VirtualMachine, state *output.TfState) (*resourcespb.VirtualMachineResource, error) {
+	var err error
+	ip := "dryrun"
+	identityId := "dryrun"
+	if !flags.DryRun {
+		ip, err = getPublicIp(resource.ResourceId, state, resource.Args.CommonParameters.CloudProvider)
+		if err != nil {
+			return nil, err
+		}
+		identityId, err = getIdentityId(resource.ResourceId, state, resource.Args.CommonParameters.CloudProvider)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// TODO: handle default values on create
+	if resource.Args.ImageReference == nil {
+		resource.Args.ImageReference = &resourcespb.ImageReference{
+			Os:      resourcespb.ImageReference_UBUNTU,
+			Version: "16.04",
+		}
+	}
+
+	return &resourcespb.VirtualMachineResource{
+		CommonParameters: &commonpb.CommonResourceParameters{
+			ResourceId:      resource.ResourceId,
+			ResourceGroupId: resource.Args.CommonParameters.ResourceGroupId,
+			Location:        resource.Args.CommonParameters.Location,
+			CloudProvider:   resource.Args.CommonParameters.CloudProvider,
+			NeedsUpdate:     false,
+		},
+		Name:                    resource.Args.Name,
+		NetworkInterfaceIds:     resource.Args.NetworkInterfaceIds,
+		NetworkSecurityGroupIds: resource.Args.NetworkSecurityGroupIds,
+		VmSize:                  resource.Args.VmSize,
+		UserDataBase64:          resource.Args.UserDataBase64,
+		SubnetId:                resource.Args.SubnetId,
+		PublicSshKey:            resource.Args.PublicSshKey,
+		PublicIpId:              resource.Args.PublicIpId,
+		GeneratePublicIp:        resource.Args.GeneratePublicIp,
+		ImageReference:          resource.Args.ImageReference,
+
+		PublicIp:   ip,
+		IdentityId: identityId,
+	}, nil
+}
+
+func getPublicIp(resourceId string, state *output.TfState, cloud commonpb.CloudProvider) (string, error) {
+	switch cloud {
+	case commonpb.CloudProvider_AWS:
+		values, err := state.GetValues(virtual_machine.AwsEC2{}, resourceId)
+		if err != nil {
+			return "", err
+		}
+		return values["public_ip"].(string), nil
+	case commonpb.CloudProvider_AZURE:
+		values, err := state.GetValues(public_ip.AzurePublicIp{}, resourceId)
+		if err != nil {
+			return "", err
+		}
+		return values["ip_address"].(string), nil
+	}
+
+	return "", fmt.Errorf("unknown cloud: %s", cloud.String())
+}
+
+func getIdentityId(resourceId string, state *output.TfState, cloud commonpb.CloudProvider) (string, error) {
+	switch cloud {
+	case commonpb.CloudProvider_AWS:
+		values, err := state.GetValues(iam.AwsIamRole{}, resourceId)
+		if err != nil {
+			return "", err
+		}
+		return values["id"].(string), nil
+	case commonpb.CloudProvider_AZURE:
+		values, err := state.GetValues(virtual_machine.AzureVirtualMachine{}, resourceId)
+		if err != nil {
+			return "", err
+		}
+		return values["identity"].([]interface{})[0].(map[string]interface{})["principal_id"].(string), nil
+	}
+
+	return "", fmt.Errorf("unknown cloud: %s", cloud.String())
 }
 
 func NewVirtualMachine(resourceId string, args *resourcespb.VirtualMachineArgs, others resources.Resources) (*VirtualMachine, error) {
@@ -213,7 +343,7 @@ func (r *VirtualMachine) Translate(ctx resources.MultyContext) ([]output.TfBlock
 	} else if r.GetCloud() == commonpb.CloudProvider_AZURE {
 		// TODO validate that NIC is on the same VNET
 		var azResources []output.TfBlock
-		rgName := rg.GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId)
+		rgName := GetResourceGroupName(r.Args.CommonParameters.ResourceGroupId)
 		nicIds, err := util.MapSliceValuesErr(r.NetworkInterface, func(v *NetworkInterface) (string, error) {
 			return resources.GetMainOutputId(v)
 		})
@@ -393,5 +523,9 @@ func (r *VirtualMachine) GetMainResourceName() (string, error) {
 }
 
 func (r *VirtualMachine) GetAwsIdentity() string {
-	return fmt.Sprintf("iam_for_vm_%s", r.ResourceId)
+	return getIdentity(r.ResourceId)
+}
+
+func getIdentity(resourceId string) string {
+	return fmt.Sprintf("iam_for_vm_%s", resourceId)
 }

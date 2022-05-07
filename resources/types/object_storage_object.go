@@ -17,10 +17,51 @@ import (
 // AWS: aws_s3_object
 // Azure: azurerm_storage_blob
 
+var objectStorageObjectMetadata = resources.ResourceMetadata[*resourcespb.ObjectStorageObjectArgs, *ObjectStorageObject, *resourcespb.ObjectStorageObjectResource]{
+	DepsGetter: func(_ string, args *resourcespb.ObjectStorageObjectArgs, _ resources.Resources) (res []string, err error) {
+		res = append(res, args.ObjectStorageId)
+		return res, nil
+	},
+	CreateFunc:        CreateObjectStorageObject,
+	UpdateFunc:        UpdateObjectStorageObject,
+	ReadFromStateFunc: ObjectStorageObjectFromState,
+	ExportFunc:        func(r *ObjectStorageObject) (*resourcespb.ObjectStorageObjectArgs, error) { return r.Args, nil },
+	ImportFunc:        NewObjectStorageObject,
+	AbbreviatedName:   "st",
+}
+
 type ObjectStorageObject struct {
 	resources.ChildResourceWithId[*ObjectStorage, *resourcespb.ObjectStorageObjectArgs]
 
 	ObjectStorage *ObjectStorage `mhcl:"ref=object_storage"`
+}
+
+func (r *ObjectStorageObject) GetMetadata() resources.ResourceMetadataInterface {
+	return &objectStorageObjectMetadata
+}
+
+func CreateObjectStorageObject(resourceId string, args *resourcespb.ObjectStorageObjectArgs, others resources.Resources) (*ObjectStorageObject, error) {
+	return NewObjectStorageObject(resourceId, args, others)
+}
+
+func UpdateObjectStorageObject(resource *ObjectStorageObject, vn *resourcespb.ObjectStorageObjectArgs, others resources.Resources) error {
+	_, err := NewObjectStorageObject(resource.ResourceId, vn, others)
+	return err
+}
+
+func ObjectStorageObjectFromState(resource *ObjectStorageObject, _ *output.TfState) (*resourcespb.ObjectStorageObjectResource, error) {
+	return &resourcespb.ObjectStorageObjectResource{
+		CommonParameters: &commonpb.CommonChildResourceParameters{
+			ResourceId:  resource.ResourceId,
+			NeedsUpdate: false,
+		},
+		Name:            resource.Args.Name,
+		Acl:             resource.Args.Acl,
+		ObjectStorageId: resource.Args.ObjectStorageId,
+		ContentBase64:   resource.Args.ContentBase64,
+		ContentType:     resource.Args.ContentType,
+		Source:          resource.Args.Source,
+	}, nil
 }
 
 func NewObjectStorageObject(resourceId string, args *resourcespb.ObjectStorageObjectArgs, others resources.Resources) (*ObjectStorageObject, error) {
